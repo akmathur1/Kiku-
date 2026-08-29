@@ -3,7 +3,7 @@ name = "kiku"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Kiku — Molterra's open-source speech recognition module. An encoder-decoder Transformer ASR following the Whisper architecture (log-Mel frontend, multitask token format), implemented from scratch in Rust and able to load open Whisper checkpoints."
+description = "Kiku — Molterra's open-source speech recognition module. A multiclass neural network for ASR — an encoder-decoder Transformer with a log-Mel frontend and multitask token format — implemented from scratch in Rust and able to load openly published checkpoints."
 
 # Excluded from the repo-root workspace (own lockfile, own target dir), the
 # same arrangement as capture/ — the empty table pins this crate as its own

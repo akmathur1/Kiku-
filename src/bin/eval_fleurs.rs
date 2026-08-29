@@ -8,7 +8,7 @@ struct Utterance {
     reference: String,
 }
 
-fn whisper_language(fleurs_lang: &str) -> anyhow::Result<&str> {
+fn checkpoint_language(fleurs_lang: &str) -> anyhow::Result<&str> {
     Ok(match fleurs_lang {
         "cmn_hans_cn" | "yue_hant_hk" => "zh",
         "fil_ph" => "tl",
@@ -134,7 +134,7 @@ fn main() -> anyhow::Result<()> {
         .ok_or_else(|| {
             anyhow::anyhow!("cannot read a language name from {}", lang_dir.display())
         })?;
-    let language = whisper_language(&fleurs_lang)?.to_string();
+    let language = checkpoint_language(&fleurs_lang)?.to_string();
     let by_character = scores_by_character(&language);
 
     let all = collect_utterances(lang_dir)?;
