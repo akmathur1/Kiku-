@@ -49,6 +49,50 @@ impl MultiHeadAttention {
         })
     }
 
+    /// Project `kv` into head-shaped keys and values: (batch, heads, kv_len, head_dim).
+    fn project_kv(&self, kv: &Tensor) -> candle_core::Result<(Tensor, Tensor)> {
+        let (b, kv_len, dim) = kv.dims3()?;
+        let head_dim = dim / self.n_heads;
+        let shape_heads = |t: Tensor| -> candle_core::Result<Tensor> {
+            t.reshape((b, kv_len, self.n_heads, head_dim))?
+                .transpose(1, 2)?
+                .contiguous()
+        };
+        Ok((
+            shape_heads(self.k.forward(kv)?)?,
+            shape_heads(self.v.forward(kv)?)?,
+        ))
+    }
+
+    /// Attend `x` over already head-shaped keys/values.
+    fn attend(
+        &self,
+        x: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        mask: Option<&Tensor>,
+    ) -> candle_core::Result<Tensor> {
+        let (b, q_len, dim) = x.dims3()?;
+        let head_dim = dim / self.n_heads;
+        let q = self
+            .q
+            .forward(x)?
+            .reshape((b, q_len, self.n_heads, head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let scale = (head_dim as f64).powf(-0.5);
+        let mut scores = (q.matmul(&k.transpose(D::Minus2, D::Minus1)?)? * scale)?;
+        if let Some(mask) = mask {
+            scores = scores.broadcast_add(mask)?;
+        }
+        let weights = candle_nn::ops::softmax_last_dim(&scores)?;
+        let ctx = weights
+            .matmul(v)?
+            .transpose(1, 2)?
+            .reshape((b, q_len, dim))?;
+        self.out.forward(&ctx)
+    }
+
     /// `x`: (batch, q_len, dim); `kv`: keys/values source (self-attention
     /// passes `x` itself, cross-attention passes the encoder output).
     fn forward(
@@ -57,29 +101,26 @@ impl MultiHeadAttention {
         kv: &Tensor,
         mask: Option<&Tensor>,
     ) -> candle_core::Result<Tensor> {
-        let (b, q_len, dim) = x.dims3()?;
-        let kv_len = kv.dim(1)?;
-        let head_dim = dim / self.n_heads;
-        let shape_heads = |t: Tensor, len: usize| -> candle_core::Result<Tensor> {
-            t.reshape((b, len, self.n_heads, head_dim))?
-                .transpose(1, 2)?
-                .contiguous()
-        };
-        let q = shape_heads(self.q.forward(x)?, q_len)?;
-        let k = shape_heads(self.k.forward(kv)?, kv_len)?;
-        let v = shape_heads(self.v.forward(kv)?, kv_len)?;
-        let scale = (head_dim as f64).powf(-0.5);
-        let mut scores = (q.matmul(&k.transpose(D::Minus2, D::Minus1)?)? * scale)?;
-        if let Some(mask) = mask {
-            scores = scores.broadcast_add(mask)?;
-        }
-        let weights = candle_nn::ops::softmax_last_dim(&scores)?;
-        let ctx = weights
-            .matmul(&v)?
-            .transpose(1, 2)?
-            .reshape((b, q_len, dim))?;
-        self.out.forward(&ctx)
+        let (k, v) = self.project_kv(kv)?;
+        self.attend(x, &k, &v, mask)
     }
+}
+
+/// Per-layer decoding cache: self-attention keys/values accumulated across
+/// steps, cross-attention keys/values computed once per encoded window.
+#[derive(Default)]
+struct LayerCache {
+    self_kv: Option<(Tensor, Tensor)>,
+    cross_kv: Option<(Tensor, Tensor)>,
+}
+
+/// The decoder's KV cache. One per decode; positions already inside the
+/// cache are never recomputed, so each step costs one token, not the prefix.
+#[derive(Default)]
+pub struct DecoderCache {
+    layers: Vec<LayerCache>,
+    /// Number of positions already decoded into the cache.
+    len: usize,
 }
 
 struct ResidualBlock {
@@ -125,6 +166,44 @@ impl ResidualBlock {
             let normed = cross_ln.forward(&x)?;
             x = (&x + cross.forward(&normed, enc, None)?)?;
         }
+        let normed = self.mlp_ln.forward(&x)?;
+        let mlp = self.fc2.forward(&self.fc1.forward(&normed)?.gelu()?)?;
+        &x + mlp
+    }
+
+    /// The cached step: self-attention keys/values for the new positions are
+    /// appended to the layer cache; cross-attention keys/values are computed
+    /// once per window and reused.
+    fn forward_cached(
+        &self,
+        x: &Tensor,
+        encoder_out: &Tensor,
+        cache: &mut LayerCache,
+        mask: Option<&Tensor>,
+    ) -> candle_core::Result<Tensor> {
+        let normed = self.attn_ln.forward(x)?;
+        let (k_new, v_new) = self.attn.project_kv(&normed)?;
+        let (k, v) = match cache.self_kv.take() {
+            Some((k_prev, v_prev)) => (
+                Tensor::cat(&[&k_prev, &k_new], 2)?,
+                Tensor::cat(&[&v_prev, &v_new], 2)?,
+            ),
+            None => (k_new, v_new),
+        };
+        cache.self_kv = Some((k.clone(), v.clone()));
+        let mut x = (x + self.attn.attend(&normed, &k, &v, mask)?)?;
+
+        let (cross, cross_ln) = self
+            .cross_attn
+            .as_ref()
+            .expect("cached decoding runs on cross-attention blocks");
+        if cache.cross_kv.is_none() {
+            cache.cross_kv = Some(cross.project_kv(encoder_out)?);
+        }
+        let (ck, cv) = cache.cross_kv.as_ref().unwrap();
+        let normed = cross_ln.forward(&x)?;
+        x = (&x + cross.attend(&normed, ck, cv, None)?)?;
+
         let normed = self.mlp_ln.forward(&x)?;
         let mlp = self.fc2.forward(&self.fc1.forward(&normed)?.gelu()?)?;
         &x + mlp
@@ -225,6 +304,40 @@ impl TextDecoder {
         let x = self.ln.forward(&x)?;
         x.broadcast_matmul(&self.token_embedding.embeddings().t()?)
     }
+
+    /// The KV-cached forward: `tokens` holds only the positions not yet in
+    /// the cache. Returns logits for those new positions.
+    pub fn forward_cached(
+        &self,
+        tokens: &Tensor,
+        encoder_out: &Tensor,
+        cache: &mut DecoderCache,
+    ) -> candle_core::Result<Tensor> {
+        if cache.layers.is_empty() {
+            cache.layers = (0..self.blocks.len())
+                .map(|_| LayerCache::default())
+                .collect();
+        }
+        let (_, new_len) = tokens.dims2()?;
+        let offset = cache.len;
+        let mut x = self
+            .token_embedding
+            .forward(tokens)?
+            .broadcast_add(&self.positions.i(offset..offset + new_len)?)?;
+        // Queries attend to every cached position plus the causal part of
+        // the new ones; a single new token needs no mask at all.
+        let mask = if new_len > 1 {
+            Some(offset_causal_mask(new_len, offset, x.device())?)
+        } else {
+            None
+        };
+        for (block, layer) in self.blocks.iter().zip(cache.layers.iter_mut()) {
+            x = block.forward_cached(&x, encoder_out, layer, mask.as_ref())?;
+        }
+        cache.len += new_len;
+        let x = self.ln.forward(&x)?;
+        x.broadcast_matmul(&self.token_embedding.embeddings().t()?)
+    }
 }
 
 fn causal_mask(len: usize, device: &Device) -> candle_core::Result<Tensor> {
@@ -232,6 +345,28 @@ fn causal_mask(len: usize, device: &Device) -> candle_core::Result<Tensor> {
         .flat_map(|q| (0..len).map(move |k| if k > q { f32::NEG_INFINITY } else { 0.0 }))
         .collect();
     Tensor::from_vec(data, (len, len), device)
+}
+
+/// Causal mask for `new_len` query positions appended after `offset` cached
+/// positions: shape (new_len, offset + new_len).
+fn offset_causal_mask(
+    new_len: usize,
+    offset: usize,
+    device: &Device,
+) -> candle_core::Result<Tensor> {
+    let total = offset + new_len;
+    let data: Vec<f32> = (0..new_len)
+        .flat_map(|q| {
+            (0..total).map(move |k| {
+                if k > offset + q {
+                    f32::NEG_INFINITY
+                } else {
+                    0.0
+                }
+            })
+        })
+        .collect();
+    Tensor::from_vec(data, (new_len, total), device)
 }
 
 pub struct Kiku {
@@ -262,6 +397,17 @@ impl Kiku {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offset_causal_mask_lets_new_queries_see_the_whole_cache() {
+        // 2 new positions after 3 cached ones: rows see all cached keys,
+        // and only the causal part of the new ones.
+        let mask = offset_causal_mask(2, 3, &Device::Cpu).unwrap();
+        let rows: Vec<Vec<f32>> = mask.to_vec2().unwrap();
+        assert_eq!(rows[0][..4], [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(rows[0][4], f32::NEG_INFINITY);
+        assert!(rows[1].iter().all(|&v| v == 0.0));
+    }
 
     #[test]
     fn causal_mask_blocks_future_positions() {

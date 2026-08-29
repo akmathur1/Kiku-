@@ -73,7 +73,7 @@ normalizer (`normalize` module), and compute pooled corpus WER (`wer` module).
 # Fetch a split and convert FLAC → WAV (needs ffmpeg; ~350 MB for test-clean):
 ./scripts/fetch-librispeech.sh test-clean
 
-# Full run (slow on CPU without KV caching), or subsample for a quick pass:
+# Full run, or subsample for a quick pass:
 cargo run --release --bin eval_librispeech -- models/tiny data/LibriSpeech/test-clean
 cargo run --release --bin eval_librispeech -- models/tiny data/LibriSpeech/test-clean --every 50
 cargo run --release --bin eval_librispeech -- models/tiny data/LibriSpeech/test-clean --limit 100 --tsv out.tsv
@@ -125,10 +125,12 @@ selected per session, with the H4–H8 stages unchanged above it.
 
 ## Status
 
-- Implemented: frontend, encoder-decoder model, checkpoint loading, greedy
-  decoding with the timestamp grammar, language ID, translation, VAD,
-  long-form windowing, WAV CLI. Verified end-to-end with `whisper-tiny` on
-  real synthesized speech and silence.
-- Not yet: KV-cached decoding (each step recomputes the prefix — correct but
-  slow), beam search and temperature fallback, previous-text conditioning,
-  streaming, our own training runs. These land as follow-up slices.
+- Implemented: frontend, encoder-decoder model, checkpoint loading, KV-cached
+  decoding with the timestamp grammar, language ID, translation, VAD, the
+  temperature fallback ladder (compression-ratio repetition detection +
+  log-probability gating, §4.5), long-form windowing, WAV CLI. Verified
+  end-to-end with `whisper-tiny` on real synthesized speech and silence.
+  Checkpoint facts and inherited limitations: [MODEL-CARD.md](MODEL-CARD.md).
+- Not yet: beam search, previous-text conditioning (the tenant keyterm
+  boosting hook), word-level timestamps (cross-attention DTW), streaming,
+  our own training runs. These land as follow-up slices.
