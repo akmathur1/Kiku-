@@ -16,6 +16,18 @@ architecture, frontend, and decoding loop stay fully ours to evolve for
 meeting audio: low volume speech, background chatter, technical vocabulary,
 and eventually our own training runs.
 
+## Architecture
+
+![Kiku architecture: log Mel spectrogram through a Conv1D+GELU stem into Transformer encoder blocks, cross attention into Transformer decoder blocks, next token prediction over the multitask token format](docs/architecture.svg)
+
+The spectrogram passes through two Conv1D layers with GELU, the second with
+stride 2, then picks up sinusoidal positional encoding and runs through the
+encoder blocks. The decoder consumes the token sequence in the multitask
+format with learned positional embeddings; each decoder block attends to its
+own history and, through cross attention, to the encoder output. The output
+projection is tied to the token embedding, and next token prediction produces
+language, task, timestamp, and text tokens from the same softmax.
+
 ## Layout
 
 | module | what it is |
