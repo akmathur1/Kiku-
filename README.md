@@ -63,6 +63,30 @@ let t = kiku::Transcriber::load(Path::new("models/tiny"))?;
 let segments = t.transcribe(&samples_16k_mono, &kiku::Options::default())?;
 ```
 
+## Evaluation: LibriSpeech word error rate
+
+The Rust counterpart of OpenAI's LibriSpeech evaluation notebook: transcribe a
+LibriSpeech split, normalize hypothesis and reference with the English
+normalizer (`normalize` module), and compute pooled corpus WER (`wer` module).
+
+```bash
+# Fetch a split and convert FLAC → WAV (needs ffmpeg; ~350 MB for test-clean):
+./scripts/fetch-librispeech.sh test-clean
+
+# Full run (slow on CPU without KV caching), or subsample for a quick pass:
+cargo run --release --bin eval_librispeech -- models/tiny data/LibriSpeech/test-clean
+cargo run --release --bin eval_librispeech -- models/tiny data/LibriSpeech/test-clean --every 50
+cargo run --release --bin eval_librispeech -- models/tiny data/LibriSpeech/test-clean --limit 100 --tsv out.tsv
+```
+
+The normalizer is a full port of Whisper's `EnglishTextNormalizer` — the
+number normalizer (currencies, ordinals, decades, "double oh seven"), the
+British→American spelling dictionary (`assets/english.json`, upstream's
+table with its one corrupted entry — `archaeology` → `archeology</span>` — fixed), contractions and title abbreviations, and Unicode symbol/diacritic
+removal — with upstream's normalizer test suite ported alongside it
+(`tests/normalizers.rs`). Evaluation output is measurement, never trusted
+meeting memory.
+
 ## What Kiku deliberately does not do
 
 Kiku never infers *who* is speaking. The paper documents Whisper confidently
