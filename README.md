@@ -87,6 +87,24 @@ removal — with upstream's normalizer test suite ported alongside it
 (`tests/normalizers.rs`). Evaluation output is measurement, never trusted
 meeting memory.
 
+## Evaluation: FLEURS multilingual transcription and translation
+
+The Rust counterpart of OpenAI's Multilingual_ASR notebook: transcribe a
+FLEURS language in its own language (forced, as the notebook does), normalize
+hypothesis and reference with the language-agnostic basic normalizer
+(`normalize::normalize_basic`), and compute pooled corpus WER — or CER for
+languages written without spaces (zh, ja, th, lo, my, km). `--translate`
+additionally runs X→English translation; FLEURS ships no English reference
+for it, so translations go to the TSV for inspection rather than being scored.
+
+```bash
+# Fetch a language (audio ships as WAV; e.g. ko_kr, de_de, es_419, cmn_hans_cn):
+./scripts/fetch-fleurs.sh es_419
+
+cargo run --release --bin eval_fleurs -- models/tiny data/fleurs/es_419 --limit 20
+cargo run --release --bin eval_fleurs -- models/tiny data/fleurs/es_419 --limit 20 --translate --tsv out.tsv
+```
+
 ## What Kiku deliberately does not do
 
 Kiku never infers *who* is speaking. The paper documents Whisper confidently

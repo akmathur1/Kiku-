@@ -830,3 +830,41 @@ pub fn normalize_english(text: &str) -> String {
 
     s.trim().to_string()
 }
+
+// ---------------------------------------------------------------------------
+// basic.py: BasicTextNormalizer (remove_diacritics=False)
+// ---------------------------------------------------------------------------
+
+/// Replace markers, symbols, and punctuation with a space, exactly as the
+/// reference `remove_symbols` does (NFKC). Diacritics survive only as part
+/// of NFKC-composed letters; a combining mark with no precomposed form is
+/// category `Mark` and is replaced like upstream replaces it.
+fn remove_symbols(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.nfkc() {
+        match c.general_category_group() {
+            GeneralCategoryGroup::Mark
+            | GeneralCategoryGroup::Symbol
+            | GeneralCategoryGroup::Punctuation => out.push(' '),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// The reference `BasicTextNormalizer`: the language-agnostic evaluation
+/// normalization — casing, bracketed markers, symbols and punctuation,
+/// whitespace. Precomposed accented letters are kept; free-standing
+/// combining marks are replaced, matching the reference byte for byte —
+/// both sides of every WER/CER pair pass through this same function.
+pub fn normalize_basic(text: &str) -> String {
+    let re = text_regexes();
+    let mut s = text.to_lowercase();
+
+    s = re.brackets.replace_all(&s, "").into_owned();
+    s = re.parens.replace_all(&s, "").into_owned();
+    s = remove_symbols(&s).to_lowercase();
+    s = re.whitespace.replace_all(&s, " ").into_owned();
+
+    s.trim().to_string()
+}

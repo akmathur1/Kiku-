@@ -6,8 +6,8 @@
 //! and reference lengths over all utterance pairs before dividing, so long
 //! utterances weigh proportionally (again matching jiwer).
 
-/// Word-level edit distance between a reference and a hypothesis.
-pub fn edit_distance(reference: &[&str], hypothesis: &[&str]) -> usize {
+/// Token-level edit distance between a reference and a hypothesis.
+pub fn edit_distance<T: PartialEq>(reference: &[T], hypothesis: &[T]) -> usize {
     let (r, h) = (reference.len(), hypothesis.len());
     let mut prev: Vec<usize> = (0..=h).collect();
     let mut curr = vec![0usize; h + 1];
@@ -38,6 +38,24 @@ pub fn corpus_wer(pairs: &[(String, String)]) -> f64 {
     edits as f64 / ref_words as f64
 }
 
+/// Pooled corpus CER over (reference, hypothesis) pairs of *normalized* text
+/// — the character-level analogue of [`corpus_wer`], for languages written
+/// without spaces (the reference notebook evaluates those per character).
+pub fn corpus_cer(pairs: &[(String, String)]) -> f64 {
+    let mut edits = 0usize;
+    let mut ref_chars = 0usize;
+    for (reference, hypothesis) in pairs {
+        let r: Vec<char> = reference.chars().filter(|c| !c.is_whitespace()).collect();
+        let h: Vec<char> = hypothesis.chars().filter(|c| !c.is_whitespace()).collect();
+        edits += edit_distance(&r, &h);
+        ref_chars += r.len();
+    }
+    if ref_chars == 0 {
+        return 0.0;
+    }
+    edits as f64 / ref_chars as f64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,5 +80,12 @@ mod tests {
             ("d".to_string(), "d".to_string()),
         ];
         assert!((corpus_wer(&pairs) - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn corpus_cer_ignores_whitespace_and_pools_by_chars() {
+        // "안녕 세상" vs "안녕 세상아": 1 insertion over 4 reference chars.
+        let pairs = vec![("안녕 세상".to_string(), "안녕 세상아".to_string())];
+        assert!((corpus_cer(&pairs) - 0.25).abs() < 1e-9);
     }
 }
