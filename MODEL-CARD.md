@@ -107,14 +107,63 @@ usable with the larger sizes. Kiku's FLEURS harness (`eval_fleurs`) measures
 this per language on our own runtime, and the LibriSpeech harness
 (`eval_librispeech`) tracks English.
 
+## Not Simple Transcription
+
+A plain transcriber maps audio to a string. Kiku's architecture is chosen
+so that it registers transcription instead: every prediction leaves a
+measurable trace that downstream systems can hold, cite, and doubt.
+
+The difference is structural, not a post processing step:
+
+- **The output is a register, not a string.** Each segment carries its start
+  and end times (from the timestamp classes), the identified language (from
+  the language classes), the average log probability of its text, and the
+  no speech probability of its window. A word without a time, a language,
+  and a confidence does not leave the decoder.
+- **Uncertainty is a first class output.** Because voice activity and
+  confidence come from the same softmax as the text, the model can say
+  "something was said here and I am not sure what" instead of inventing a
+  fluent sentence. A plain transcriber has no channel for that statement.
+- **Time is predicted, not aligned afterwards.** The timestamp classes make
+  segmentation part of decoding, so every span of text is addressable back
+  to a span of audio. That addressability is what makes a transcript
+  citable evidence rather than prose.
+- **One model, several verdicts.** Language identification, task selection,
+  voice activity, and segmentation are all classes of the one output layer,
+  so the evidence about a segment is internally consistent: the same
+  forward pass that produced the words produced the doubt about them.
+
+## Pairing with the Memory Layer
+
+This register is the contract between hearing and memory. Molterra's memory
+layer stores durable, cited organizational memory, and it only accepts what
+it can later defend:
+
+- **Provenance.** A fact absorbed from a meeting points back to the segment
+  that grounds it: which audio span, which language, at what confidence.
+  Memory without a pointer back to evidence is not written.
+- **The evidence gate.** Confident segments can enter trusted reasoning and
+  become graph facts, notes, and tasks. Weak segments remain display
+  material: a human can read them, the memory layer does not learn from
+  them.
+- **Closed lexicon repair.** A mangled name is repaired only against the
+  tenant's own lexicon of people, companies, and terms already in memory.
+  The memory layer constrains the transcript; the transcript never invents
+  entries in the memory layer.
+- **Degradation instead of fabrication.** When audio is weak, the register
+  records uncertainty and memory abstains. The failure mode is a gap that
+  can be asked about, never a confident falsehood that gets remembered.
+
+A transcript in this design is not the product. It is the evidence stream
+that lets meeting speech become organizational memory without the memory
+ever trusting a guess.
+
 ## Intended Use in Molterra
 
-Kiku exists to turn meeting speech into evidence carrying text. Every
-segment it emits carries start and end times, the identified language, the
-average log probability of the decoded text, and the no speech probability.
-Molterra's hearing pipeline gates on that evidence: a confident segment can
-enter trusted reasoning, a weak one is display material only, and repairs
-are closed over the tenant's own lexicon so nothing is invented.
+Kiku exists to turn meeting speech into evidence carrying text. Molterra's
+hearing pipeline gates on the register described above: a confident segment
+can enter trusted reasoning, a weak one is display material only, and
+repairs are closed over the tenant's own lexicon so nothing is invented.
 
 Recording in Molterra is consent gated. We do not use Kiku, and recommend
 against using any ASR model, to transcribe people recorded without their
