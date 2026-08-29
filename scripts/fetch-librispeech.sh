@@ -4,7 +4,7 @@
 #
 # Usage: fetch-librispeech.sh [split] [dest-dir]
 #   split: test-clean (default) | test-other | dev-clean | dev-other
-#   dest:  default kiku/data (the split extracts to <dest>/LibriSpeech/<split>)
+#   dest:  default data (the split extracts to <dest>/LibriSpeech/<split>)
 set -euo pipefail
 
 SPLIT="${1:-test-clean}"

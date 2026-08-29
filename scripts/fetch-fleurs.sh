@@ -5,7 +5,7 @@
 # Usage: fetch-fleurs.sh <lang> [dest-dir]
 #   lang: a FLEURS language directory name, e.g. ko_kr, de_de, cmn_hans_cn
 #         (the full list is in the reference Multilingual_ASR notebook)
-#   dest: default kiku/data/fleurs (the language extracts to <dest>/<lang>)
+#   dest: default data/fleurs (the language extracts to <dest>/<lang>)
 set -euo pipefail
 
 LANG_DIR="${1:?usage: fetch-fleurs.sh <lang> [dest-dir]}"

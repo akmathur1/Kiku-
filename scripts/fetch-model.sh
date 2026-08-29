@@ -4,7 +4,7 @@
 #
 # Usage: fetch-model.sh [size] [dest-dir]
 #   size: tiny | base | small | medium (default: tiny)
-#   dest: default kiku/models/<size>
+#   dest: default models/<size>
 set -euo pipefail
 
 SIZE="${1:-tiny}"

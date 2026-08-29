@@ -110,18 +110,19 @@ cargo run --release --bin eval_fleurs -- models/tiny data/fleurs/es_419 --limit 
 Kiku never infers *who* is speaking. The paper documents Whisper confidently
 guessing speaker names from transcript context; in Molterra, speaker identity
 belongs to the structural channel attribution and meeting-scoped diarization
-in `capture/`, and an ASR model's guess is never identity evidence. Kiku's
-output is transcription evidence — text, times, language, confidence — and the
-existing hearing pipeline (record pass, reconciliation, hard-word repair,
-acoustic-regime gating) remains the trust layer above any ASR backend.
+in the capture pipeline, and an ASR model's guess is never identity evidence.
+Kiku's output is transcription evidence — text, times, language, confidence —
+and the hearing pipeline above it (record pass, reconciliation, hard-word
+repair, acoustic-regime gating) remains the trust layer above any ASR backend.
 
-## Relationship to `capture/`
+## Relationship to Molterra
 
-Kiku is a standalone crate (its own workspace, like `capture/`). The capture
-pipeline currently uses a hosted ASR backend; Kiku is the seam for a local,
-open backend behind the same evidence contract. Integration lands as its own
-slice: an ASR-backend trait in `capture/` with Kiku as one implementation,
-selected per session, with the H4–H8 stages unchanged above it.
+Kiku was developed as Molterra's ASR module and is maintained here as a
+standalone open-source crate. Molterra's capture pipeline currently uses a
+hosted ASR backend; Kiku is the seam for a local, open backend behind the
+same evidence contract — an ASR-backend trait with Kiku as one
+implementation, selected per session, with the higher hearing stages
+unchanged above it.
 
 ## Status
 
@@ -134,3 +135,8 @@ selected per session, with the H4–H8 stages unchanged above it.
 - Not yet: beam search, previous-text conditioning (the tenant keyterm
   boosting hook), word-level timestamps (cross-attention DTW), streaming,
   our own training runs. These land as follow-up slices.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Kiku follows the Whisper architecture and
+loads the open Whisper checkpoints published by OpenAI (also MIT-licensed).

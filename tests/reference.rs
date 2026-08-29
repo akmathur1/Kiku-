@@ -5,7 +5,7 @@
 //!
 //! Two tiers, mirroring the repo's has_db pattern honestly:
 //! - fixture-only tests run unconditionally (`tests/fixtures/jfk.wav`);
-//! - checkpoint-backed tests return early when `kiku/models/tiny` is absent
+//! - checkpoint-backed tests return early when `models/tiny` is absent
 //!   (CI has no checkpoint), so a green run there proves nothing — the real
 //!   execution is local with a fetched model. Run `scripts/fetch-model.sh
 //!   tiny` first to make them real.
@@ -76,7 +76,7 @@ fn audio_and_log_mel_invariants() {
 #[test]
 fn tokenizer_language_token_invariants() {
     let Some(dir) = model_dir() else {
-        eprintln!("skipping: no checkpoint at kiku/models/tiny (run scripts/fetch-model.sh tiny)");
+        eprintln!("skipping: no checkpoint at models/tiny (run scripts/fetch-model.sh tiny)");
         return;
     };
     let tok = Tokenizer::load(&dir.join("tokenizer.json")).expect("tokenizer loads");
@@ -116,7 +116,7 @@ fn tokenizer_language_token_invariants() {
 #[test]
 fn transcribe_jfk_end_to_end() {
     let Some(dir) = model_dir() else {
-        eprintln!("skipping: no checkpoint at kiku/models/tiny (run scripts/fetch-model.sh tiny)");
+        eprintln!("skipping: no checkpoint at models/tiny (run scripts/fetch-model.sh tiny)");
         return;
     };
     let transcriber = Transcriber::load(&dir).expect("model loads");
