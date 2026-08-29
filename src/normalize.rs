@@ -1,17 +1,3 @@
-//! English text normalization for evaluation.
-//!
-//! A faithful Rust port of the reference (openai/whisper) normalizers:
-//! `EnglishNumberNormalizer`, `EnglishSpellingNormalizer`, and
-//! `EnglishTextNormalizer`. Hypothesis and reference are standardized before
-//! word error rate is computed, so a difference in casing, punctuation,
-//! contractions, number spelling, or British/American spelling does not count
-//! as an error.
-//!
-//! The port preserves the reference's behavior, including its quirks (e.g.
-//! `'s` always expands to " is", so "soul's" becomes "soul is") — both sides
-//! of a WER comparison pass through the same transform, so fidelity to the
-//! reference matters more than linguistic perfection.
-
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -19,11 +5,6 @@ use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory};
 
-// ---------------------------------------------------------------------------
-// basic.py: remove_symbols_and_diacritics
-// ---------------------------------------------------------------------------
-
-/// Non-ASCII letters that are not separated by NFKD normalization.
 const ADDITIONAL_DIACRITICS: &[(char, &str)] = &[
     ('œ', "oe"),
     ('Œ', "OE"),
@@ -43,9 +24,6 @@ const ADDITIONAL_DIACRITICS: &[(char, &str)] = &[
     ('Ł', "L"),
 ];
 
-/// Replace markers, symbols, and punctuation with a space and drop
-/// diacritics (category Mn plus the manual mappings above), exactly as the
-/// reference `remove_symbols_and_diacritics` does.
 fn remove_symbols_and_diacritics(s: &str, keep: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.nfkd() {
@@ -56,7 +34,6 @@ fn remove_symbols_and_diacritics(s: &str, keep: &str) -> String {
         } else {
             use unicode_properties::GeneralCategory::NonspacingMark;
             if c.general_category() == NonspacingMark {
-                // dropped
             } else {
                 match c.general_category_group() {
                     GeneralCategoryGroup::Mark
@@ -69,10 +46,6 @@ fn remove_symbols_and_diacritics(s: &str, keep: &str) -> String {
     }
     out
 }
-
-// ---------------------------------------------------------------------------
-// english.py: EnglishNumberNormalizer
-// ---------------------------------------------------------------------------
 
 const ONES: &[&str] = &[
     "one",
@@ -130,7 +103,6 @@ fn ones_value(w: &str) -> Option<u128> {
     ONES.iter().position(|&n| n == w).map(|i| i as u128 + 1)
 }
 
-/// Plural and ordinal forms of ones: ("fours", (4, "s")), ("fourth", (4, "th")).
 fn ones_suffixed(w: &str) -> Option<(u128, &'static str)> {
     match w {
         "zeroth" => return Some((0, "th")),
@@ -169,7 +141,6 @@ fn tens_value(w: &str) -> Option<u128> {
     TENS.iter().find(|(n, _)| *n == w).map(|(_, v)| *v)
 }
 
-/// ("twenties", (20, "s")), ("twentieth", (20, "th")).
 fn tens_suffixed(w: &str) -> Option<(u128, &'static str)> {
     for &(name, value) in TENS {
         if w == name.replace('y', "ies") {
@@ -186,7 +157,6 @@ fn multiplier_value(w: &str) -> Option<u128> {
     MULTIPLIERS.iter().find(|(n, _)| *n == w).map(|(_, v)| *v)
 }
 
-/// ("millions", (1000000, "s")), ("millionth", (1000000, "th")).
 fn multiplier_suffixed(w: &str) -> Option<(u128, &'static str)> {
     for &(name, value) in MULTIPLIERS {
         if w == format!("{name}s") {
@@ -221,7 +191,6 @@ fn is_prefix_symbol(c: char) -> bool {
     matches!(c, '-' | '+' | '£' | '€' | '$' | '¢')
 }
 
-/// Words that may open a decimal after "point": ones, tens, and zeros.
 fn is_decimal_word(w: &str) -> bool {
     ones_value(w).is_some() || tens_value(w).is_some() || is_zero(w)
 }
@@ -230,7 +199,6 @@ fn is_special(w: &str) -> bool {
     matches!(w, "and" | "double" | "triple" | "point")
 }
 
-/// Any word the number state machine consumes.
 fn is_number_word(w: &str) -> bool {
     is_zero(w)
         || ones_value(w).is_some()
@@ -246,7 +214,6 @@ fn is_number_word(w: &str) -> bool {
         || is_special(w)
 }
 
-/// `^\d+(\.\d+)?$`
 fn is_numeric(w: &str) -> bool {
     let mut parts = w.splitn(2, '.');
     let int = parts.next().unwrap_or("");
@@ -259,8 +226,6 @@ fn is_numeric(w: &str) -> bool {
     }
 }
 
-/// The state machine's accumulated value: an exact integer or a digit string
-/// (a decimal like "2.5", or a nominal concatenation like "007").
 #[derive(Debug, Clone, PartialEq)]
 enum Value {
     Int(u128),
@@ -276,8 +241,6 @@ impl Value {
     }
 }
 
-/// Fraction("d+.d*") * multiplier, when the product is an integer — the
-/// reference's `Fraction(value) * multiplier; p.denominator == 1` check.
 fn decimal_times_multiplier(s: &str, multiplier: u128) -> Option<u128> {
     let (int_part, frac_part) = match s.split_once('.') {
         Some((i, f)) => (i, f),
@@ -323,7 +286,6 @@ impl NumberMachine {
         }
     }
 
-    /// The `value or ""` idiom: Int(0) renders as "" like Python's falsy 0.
     fn value_or_empty(&self) -> String {
         match &self.value {
             None | Some(Value::Int(0)) => String::new(),
@@ -332,8 +294,6 @@ impl NumberMachine {
     }
 }
 
-/// Port of `EnglishNumberNormalizer.process_words`: a windowed pass over the
-/// words with (prev, current, next) context.
 fn process_words(words: &[String]) -> Vec<String> {
     let mut m = NumberMachine {
         prefix: None,
@@ -367,11 +327,9 @@ fn process_words(words: &[String]) -> Vec<String> {
         let prev_is_tens = prev.is_some_and(|p| tens_value(p).is_some());
 
         if is_numeric(current_without_prefix) {
-            // Arabic numbers (potentially with signs and fractions).
             if let Some(v) = m.value.take() {
                 if let Value::Str(s) = &v {
                     if s.ends_with('.') {
-                        // Concatenate decimals / IP address components.
                         m.value = Some(Value::Str(format!("{s}{current}")));
                         continue;
                     }
@@ -388,7 +346,6 @@ fn process_words(words: &[String]) -> Vec<String> {
                 Some(Value::Int(current_without_prefix.parse().unwrap()))
             };
         } else if !is_number_word(current) {
-            // Non-numeric words.
             m.output_value();
             m.output_raw(current.to_string());
         } else if is_zero(current) {
@@ -399,7 +356,6 @@ fn process_words(words: &[String]) -> Vec<String> {
                 None => m.value = Some(Value::Int(ones)),
                 Some(Value::Str(s)) => {
                     if prev_is_tens && ones < 10 {
-                        // Replace the last zero with the digit.
                         debug_assert!(s.ends_with('0'));
                         m.value = Some(Value::Str(format!("{}{ones}", &s[..s.len() - 1])));
                     } else {
@@ -422,7 +378,6 @@ fn process_words(words: &[String]) -> Vec<String> {
                             m.value = Some(Value::Str(format!("{v}{ones}")));
                         }
                     } else {
-                        // Eleven to nineteen.
                         if v % 100 == 0 {
                             m.value = Some(Value::Int(v + ones));
                         } else {
@@ -432,7 +387,6 @@ fn process_words(words: &[String]) -> Vec<String> {
                 }
             }
         } else if let Some((ones, suffix)) = ones_suffixed(current) {
-            // Ordinal or cardinal; yield the number right away.
             match m.value.take() {
                 None => m.output_raw(format!("{ones}{suffix}")),
                 Some(Value::Str(s)) => {
@@ -501,7 +455,6 @@ fn process_words(words: &[String]) -> Vec<String> {
                     }
                 },
                 Some(Value::Int(0)) => {
-                    // Fraction(0) * multiplier is the integer 0.
                     m.value = Some(Value::Int(0));
                 }
                 Some(Value::Int(v)) => {
@@ -528,7 +481,6 @@ fn process_words(words: &[String]) -> Vec<String> {
                 }
             }
         } else if let Some(p) = preceding_prefixer(current) {
-            // Apply prefix (positive, minus, etc.) if it precedes a number.
             m.output_value();
             if next.is_some_and(is_number_word) || next_is_numeric {
                 m.prefix = Some(p);
@@ -536,7 +488,6 @@ fn process_words(words: &[String]) -> Vec<String> {
                 m.output_raw(current.to_string());
             }
         } else if let Some(p) = following_prefixer(current) {
-            // Apply prefix (dollars, cents, etc.) only after a number.
             if m.value.is_some() {
                 m.prefix = Some(p);
                 m.output_value();
@@ -544,7 +495,6 @@ fn process_words(words: &[String]) -> Vec<String> {
                 m.output_raw(current.to_string());
             }
         } else if current == "per" || current == "percent" {
-            // Suffix symbols (percent -> '%').
             match m.value.take() {
                 Some(v) if current == "percent" => m.output_raw(format!("{}%", v.render())),
                 Some(v) if next == Some("cent") => {
@@ -560,11 +510,9 @@ fn process_words(words: &[String]) -> Vec<String> {
         } else if is_special(current) {
             let next_in_words = next.is_some_and(is_number_word);
             if !next_in_words && !next_is_numeric {
-                // Apply special handling only if the next word can be numeric.
                 m.output_value();
                 m.output_raw(current.to_string());
             } else if current == "and" {
-                // Ignore "and" after hundreds, thousands, etc.
                 if !prev.is_some_and(|p| multiplier_value(p).is_some()) {
                     m.output_value();
                     m.output_raw(current.to_string());
@@ -613,14 +561,12 @@ fn number_regexes() -> &'static (Regex, Regex, Regex, Regex, Regex, Regex, Regex
     })
 }
 
-/// Port of `EnglishNumberNormalizer.preprocess`.
 fn number_preprocess(s: &str) -> String {
     let (half_re, letter_digit, digit_letter, suffix_re, ..) = {
         let r = number_regexes();
         (&r.0, &r.1, &r.2, &r.3)
     };
 
-    // Replace "<number> and a half" with "<number> point five".
     let segments: Vec<&str> = half_re.split(s).collect();
     let mut results: Vec<String> = Vec::new();
     let n = segments.len();
@@ -642,22 +588,18 @@ fn number_preprocess(s: &str) -> String {
     }
     let mut s = results.join(" ");
 
-    // Put a space at number/letter boundaries...
     s = letter_digit.replace_all(&s, "$1 $2").into_owned();
     s = digit_letter.replace_all(&s, "$1 $2").into_owned();
-    // ...but remove spaces which could be a suffix.
     s = suffix_re.replace_all(&s, "$1$2").into_owned();
     s
 }
 
-/// Port of `EnglishNumberNormalizer.postprocess`.
 fn number_postprocess(s: &str) -> String {
     let (cents_re, extract_re, ones_re) = {
         let r = number_regexes();
         (&r.4, &r.5, &r.6)
     };
 
-    // Currency postprocessing: "$2 and ¢7" -> "$2.07".
     let mut s = cents_re
         .replace_all(s, |caps: &regex::Captures| {
             let cents: u32 = caps[3].parse().unwrap();
@@ -671,24 +613,16 @@ fn number_postprocess(s: &str) -> String {
         })
         .into_owned();
 
-    // Write "one(s)" instead of "1(s)", just for readability.
     s = ones_re.replace_all(&s, "one$1").into_owned();
     s
 }
 
-/// The reference `EnglishNumberNormalizer`: spelled-out numbers become arabic
-/// numerals, keeping suffixes (1960s, 274th) and spelling currency symbols
-/// before the number ($20 million -> $20000000).
 pub fn normalize_english_numbers(text: &str) -> String {
     let s = number_preprocess(text);
     let words: Vec<String> = s.split_whitespace().map(str::to_string).collect();
     let s = process_words(&words).join(" ");
     number_postprocess(&s)
 }
-
-// ---------------------------------------------------------------------------
-// english.py: EnglishSpellingNormalizer
-// ---------------------------------------------------------------------------
 
 fn spelling_map() -> &'static HashMap<String, String> {
     static MAP: OnceLock<HashMap<String, String>> = OnceLock::new();
@@ -698,8 +632,6 @@ fn spelling_map() -> &'static HashMap<String, String> {
     })
 }
 
-/// The reference `EnglishSpellingNormalizer`: British-to-American spelling
-/// mappings (tysto.com list), word by word.
 pub fn normalize_english_spelling(text: &str) -> String {
     text.split_whitespace()
         .map(|w| spelling_map().get(w).map_or(w, String::as_str))
@@ -707,14 +639,7 @@ pub fn normalize_english_spelling(text: &str) -> String {
         .join(" ")
 }
 
-// ---------------------------------------------------------------------------
-// english.py: EnglishTextNormalizer
-// ---------------------------------------------------------------------------
-
-/// The replacement pass: contractions and title abbreviations, applied in the
-/// reference's order.
 const REPLACERS: &[(&str, &str)] = &[
-    // Common contractions.
     (r"\bwon't\b", "will not"),
     (r"\bcan't\b", "can not"),
     (r"\blet's\b", "let us"),
@@ -729,7 +654,6 @@ const REPLACERS: &[(&str, &str)] = &[
     (r"\bcoulda\b", "could have"),
     (r"\bshoulda\b", "should have"),
     (r"\bma'am\b", "madam"),
-    // Contractions in titles/prefixes.
     (r"\bmr\b", "mister "),
     (r"\bmrs\b", "missus "),
     (r"\bst\b", "saint "),
@@ -751,14 +675,12 @@ const REPLACERS: &[(&str, &str)] = &[
     (r"\bjr\b", "junior "),
     (r"\bsr\b", "senior "),
     (r"\besq\b", "esquire "),
-    // Perfect tenses.
     (r"'d been\b", " had been"),
     (r"'s been\b", " has been"),
     (r"'d gone\b", " had gone"),
     (r"'s gone\b", " has gone"),
-    (r"'d done\b", " had done"), // "'s done" is ambiguous
+    (r"'d done\b", " had done"),
     (r"'s got\b", " has got"),
-    // General contractions.
     (r"n't\b", " not"),
     (r"'re\b", " are"),
     (r"'s\b", " is"),
@@ -801,9 +723,6 @@ fn text_regexes() -> &'static TextRegexes {
     })
 }
 
-/// The reference `EnglishTextNormalizer`: the full evaluation normalization —
-/// casing, bracketed markers, fillers, contractions, titles, symbols and
-/// diacritics, spelled-out numbers, and British→American spelling.
 pub fn normalize_english(text: &str) -> String {
     let re = text_regexes();
     let mut s = text.to_lowercase();
@@ -831,14 +750,6 @@ pub fn normalize_english(text: &str) -> String {
     s.trim().to_string()
 }
 
-// ---------------------------------------------------------------------------
-// basic.py: BasicTextNormalizer (remove_diacritics=False)
-// ---------------------------------------------------------------------------
-
-/// Replace markers, symbols, and punctuation with a space, exactly as the
-/// reference `remove_symbols` does (NFKC). Diacritics survive only as part
-/// of NFKC-composed letters; a combining mark with no precomposed form is
-/// category `Mark` and is replaced like upstream replaces it.
 fn remove_symbols(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.nfkc() {
@@ -852,11 +763,6 @@ fn remove_symbols(s: &str) -> String {
     out
 }
 
-/// The reference `BasicTextNormalizer`: the language-agnostic evaluation
-/// normalization — casing, bracketed markers, symbols and punctuation,
-/// whitespace. Precomposed accented letters are kept; free-standing
-/// combining marks are replaced, matching the reference byte for byte —
-/// both sides of every WER/CER pair pass through this same function.
 pub fn normalize_basic(text: &str) -> String {
     let re = text_regexes();
     let mut s = text.to_lowercase();

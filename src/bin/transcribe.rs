@@ -1,11 +1,3 @@
-//! `kiku-transcribe` — transcribe a WAV file from the command line.
-//!
-//! Usage: kiku-transcribe <model-dir> <audio.wav> [--language en] [--translate]
-//!
-//! The model directory holds `config.json`, `model.safetensors`, and
-//! `tokenizer.json` (the Hugging Face Whisper checkpoint layout); see
-//! kiku/scripts/fetch-model.sh.
-
 use kiku::{audio, Options, Task, Transcriber};
 
 fn main() -> anyhow::Result<()> {
@@ -46,7 +38,6 @@ fn main() -> anyhow::Result<()> {
                 .collect::<Result<_, _>>()?
         }
     };
-    // Downmix to mono, then resample to 16 kHz.
     let channels = spec.channels as usize;
     let mono: Vec<f32> = raw
         .chunks(channels)

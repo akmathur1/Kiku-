@@ -1,11 +1,3 @@
-//! Token decoding for the multitask format.
-//!
-//! Kiku only needs to *decode* model output (id → text), so this reads the
-//! checkpoint's `tokenizer.json` vocabulary directly — byte-level BPE with
-//! the GPT-2 byte↔unicode table — without pulling in a full tokenizer
-//! dependency. Special tokens (task, language, timestamps) are resolved by
-//! their literal names so the ids are never hard-coded.
-
 use std::collections::HashMap;
 
 use anyhow::Context;
@@ -28,7 +20,6 @@ struct TokenizerModel {
     vocab: HashMap<String, u32>,
 }
 
-/// The ids the multitask decoding loop steers with.
 #[derive(Debug, Clone, Copy)]
 pub struct SpecialTokens {
     pub sot: u32,
@@ -37,24 +28,17 @@ pub struct SpecialTokens {
     pub translate: u32,
     pub no_timestamps: u32,
     pub no_speech: u32,
-    /// First timestamp token, <|0.00|>; each step above it is 20 ms.
     pub timestamp_begin: u32,
-    /// First language token, immediately after <|startoftranscript|>.
     pub language_begin: u32,
     pub language_count: u32,
 }
 
 pub struct Tokenizer {
-    /// id → raw bytes for vocabulary tokens.
     id_to_bytes: Vec<Option<Vec<u8>>>,
-    /// id → literal content for added (special) tokens.
     added: HashMap<u32, String>,
     pub special: SpecialTokens,
 }
 
-/// GPT-2's printable-unicode encoding of raw bytes: printable ASCII and two
-/// Latin-1 ranges map to themselves; the rest map to 256+n in registration
-/// order. This inverts that table.
 fn unicode_to_byte() -> HashMap<char, u8> {
     let mut direct: Vec<u8> = (b'!'..=b'~').collect();
     direct.extend(0xA1..=0xAC_u8);
@@ -109,11 +93,6 @@ impl Tokenizer {
                 .with_context(|| format!("special token {name} missing from tokenizer"))
         };
         let sot = find("<|startoftranscript|>")?;
-        // Language tokens sit directly after <|startoftranscript|>; count the
-        // contiguous <|xx|> run rather than assuming a language list. Tags are
-        // 2–3 lowercase letters, which excludes the control tokens that follow
-        // the run (<|translate|>, <|nospeech|>, ...) — those are also
-        // lowercase but always longer.
         let is_lang = |content: &str| {
             content.starts_with("<|")
                 && content.ends_with("|>")
@@ -148,8 +127,6 @@ impl Tokenizer {
         })
     }
 
-    /// Decode text tokens; special tokens are skipped, timestamp tokens are
-    /// above the vocabulary and skipped too.
     pub fn decode(&self, tokens: &[u32]) -> String {
         let mut bytes = Vec::new();
         for &id in tokens {
@@ -163,7 +140,6 @@ impl Tokenizer {
         String::from_utf8_lossy(&bytes).into_owned()
     }
 
-    /// The language tag (e.g. "en") for a language token id, if it is one.
     pub fn language_tag(&self, id: u32) -> Option<&str> {
         let sp = &self.special;
         if !(sp.language_begin..sp.language_begin + sp.language_count).contains(&id) {
@@ -194,7 +170,6 @@ mod tests {
         let table = unicode_to_byte();
         assert_eq!(table[&'A'], b'A');
         assert_eq!(table[&'~'], b'~');
-        // Space is not printable-direct in GPT-2's table; it maps from Ġ.
         assert_eq!(table[&'Ġ'], b' ');
     }
 }

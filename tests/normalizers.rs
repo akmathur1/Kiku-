@@ -1,14 +1,7 @@
-//! The Rust port of the reference (openai/whisper) normalizer tests —
-//! test_number_normalizer (parametrized over the number normalizer and the
-//! full text normalizer, exactly as upstream), test_spelling_normalizer, and
-//! test_text_normalizer.
-
 use kiku::normalize::{
     normalize_basic, normalize_english, normalize_english_numbers, normalize_english_spelling,
 };
 
-/// Upstream parametrizes over [EnglishNumberNormalizer(), EnglishTextNormalizer()]:
-/// every case must hold under both.
 fn both(input: &str, expected: &str) {
     assert_eq!(
         normalize_english_numbers(input),
@@ -94,15 +87,11 @@ fn number_normalizer() {
 
 #[test]
 fn basic_normalizer_diacritics() {
-    // Precomposed accented letters survive (NFKC keeps them as letters)…
     assert_eq!(
         normalize_basic("caf\u{e9} na\u{ef}ve"),
         "caf\u{e9} na\u{ef}ve"
     );
-    // …including ones written with combining marks, which NFKC composes.
     assert_eq!(normalize_basic("cafe\u{301}"), "caf\u{e9}");
-    // A combining mark with no precomposed form is category Mark and is
-    // replaced with a space, exactly as the reference `remove_symbols` does.
     assert_eq!(normalize_basic("q\u{301}z"), "q z");
 }
 

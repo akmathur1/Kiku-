@@ -1,13 +1,3 @@
-//! The Kiku model: an encoder-decoder Transformer over log-Mel input,
-//! following the Whisper architecture.
-//!
-//! Encoder: 2x Conv1D(width 3) + GELU stem (second conv stride 2), fixed
-//! sinusoidal positions, pre-activation residual blocks, final LayerNorm.
-//! Decoder: learned positions, pre-activation residual blocks with
-//! cross-attention into the encoder, output projection tied to the token
-//! embedding. Weight names follow the Hugging Face Whisper checkpoint
-//! layout so open checkpoints load directly.
-
 use candle_core::{DType, Device, IndexOp, Tensor, D};
 use candle_nn::{
     conv1d, embedding, layer_norm, linear, linear_no_bias, Conv1d, Conv1dConfig, Embedding,
@@ -15,7 +5,6 @@ use candle_nn::{
 };
 use serde::Deserialize;
 
-/// The architecture hyperparameters, read from the checkpoint's config.json.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub num_mel_bins: usize,
@@ -41,7 +30,6 @@ impl MultiHeadAttention {
     fn load(dim: usize, n_heads: usize, vb: VarBuilder) -> candle_core::Result<Self> {
         Ok(Self {
             q: linear(dim, dim, vb.pp("q_proj"))?,
-            // The key projection carries no bias in the Whisper architecture.
             k: linear_no_bias(dim, dim, vb.pp("k_proj"))?,
             v: linear(dim, dim, vb.pp("v_proj"))?,
             out: linear(dim, dim, vb.pp("out_proj"))?,
@@ -49,7 +37,6 @@ impl MultiHeadAttention {
         })
     }
 
-    /// Project `kv` into head-shaped keys and values: (batch, heads, kv_len, head_dim).
     fn project_kv(&self, kv: &Tensor) -> candle_core::Result<(Tensor, Tensor)> {
         let (b, kv_len, dim) = kv.dims3()?;
         let head_dim = dim / self.n_heads;
@@ -64,7 +51,6 @@ impl MultiHeadAttention {
         ))
     }
 
-    /// Attend `x` over already head-shaped keys/values.
     fn attend(
         &self,
         x: &Tensor,
@@ -93,8 +79,6 @@ impl MultiHeadAttention {
         self.out.forward(&ctx)
     }
 
-    /// `x`: (batch, q_len, dim); `kv`: keys/values source (self-attention
-    /// passes `x` itself, cross-attention passes the encoder output).
     fn forward(
         &self,
         x: &Tensor,
@@ -106,20 +90,15 @@ impl MultiHeadAttention {
     }
 }
 
-/// Per-layer decoding cache: self-attention keys/values accumulated across
-/// steps, cross-attention keys/values computed once per encoded window.
 #[derive(Default)]
 struct LayerCache {
     self_kv: Option<(Tensor, Tensor)>,
     cross_kv: Option<(Tensor, Tensor)>,
 }
 
-/// The decoder's KV cache. One per decode; positions already inside the
-/// cache are never recomputed, so each step costs one token, not the prefix.
 #[derive(Default)]
 pub struct DecoderCache {
     layers: Vec<LayerCache>,
-    /// Number of positions already decoded into the cache.
     len: usize,
 }
 
@@ -158,7 +137,6 @@ impl ResidualBlock {
         encoder_out: Option<&Tensor>,
         mask: Option<&Tensor>,
     ) -> candle_core::Result<Tensor> {
-        // Pre-activation residual: LayerNorm feeds the sublayer, not its sum.
         let normed = self.attn_ln.forward(x)?;
         let mut x = (x + self.attn.forward(&normed, &normed, mask)?)?;
         if let Some((cross, cross_ln)) = &self.cross_attn {
@@ -171,9 +149,6 @@ impl ResidualBlock {
         &x + mlp
     }
 
-    /// The cached step: self-attention keys/values for the new positions are
-    /// appended to the layer cache; cross-attention keys/values are computed
-    /// once per window and reused.
     fn forward_cached(
         &self,
         x: &Tensor,
@@ -239,19 +214,16 @@ impl AudioEncoder {
         Ok(Self {
             conv1: conv1d(cfg.num_mel_bins, dim, 3, conv_cfg(1), vb.pp("conv1"))?,
             conv2: conv1d(dim, dim, 3, conv_cfg(2), vb.pp("conv2"))?,
-            // The sinusoidal table ships in the checkpoint; loading it beats
-            // recomputing and keeps parity with the reference bit-for-bit.
             positions: vb.get((cfg.max_source_positions, dim), "embed_positions.weight")?,
             blocks,
             ln_post: layer_norm(dim, 1e-5, vb.pp("layer_norm"))?,
         })
     }
 
-    /// `mel`: (batch, n_mels, n_frames) → (batch, n_frames/2, dim).
     pub fn forward(&self, mel: &Tensor) -> candle_core::Result<Tensor> {
         let x = self.conv1.forward(mel)?.gelu()?;
         let x = self.conv2.forward(&x)?.gelu()?;
-        let mut x = x.transpose(1, 2)?; // (batch, positions, dim)
+        let mut x = x.transpose(1, 2)?;
         let seq = x.dim(1)?;
         x = x.broadcast_add(&self.positions.i(..seq)?)?;
         for block in &self.blocks {
@@ -289,8 +261,6 @@ impl TextDecoder {
         })
     }
 
-    /// Returns next-token logits for every position: (batch, len, vocab).
-    /// The output projection is tied to the token embedding.
     pub fn forward(&self, tokens: &Tensor, encoder_out: &Tensor) -> candle_core::Result<Tensor> {
         let (_, len) = tokens.dims2()?;
         let mut x = self
@@ -305,8 +275,6 @@ impl TextDecoder {
         x.broadcast_matmul(&self.token_embedding.embeddings().t()?)
     }
 
-    /// The KV-cached forward: `tokens` holds only the positions not yet in
-    /// the cache. Returns logits for those new positions.
     pub fn forward_cached(
         &self,
         tokens: &Tensor,
@@ -324,8 +292,6 @@ impl TextDecoder {
             .token_embedding
             .forward(tokens)?
             .broadcast_add(&self.positions.i(offset..offset + new_len)?)?;
-        // Queries attend to every cached position plus the causal part of
-        // the new ones; a single new token needs no mask at all.
         let mask = if new_len > 1 {
             Some(offset_causal_mask(new_len, offset, x.device())?)
         } else {
@@ -347,8 +313,6 @@ fn causal_mask(len: usize, device: &Device) -> candle_core::Result<Tensor> {
     Tensor::from_vec(data, (len, len), device)
 }
 
-/// Causal mask for `new_len` query positions appended after `offset` cached
-/// positions: shape (new_len, offset + new_len).
 fn offset_causal_mask(
     new_len: usize,
     offset: usize,
@@ -376,8 +340,6 @@ pub struct Kiku {
 }
 
 impl Kiku {
-    /// Load from a checkpoint directory holding `config.json` and
-    /// `model.safetensors` in the Hugging Face Whisper layout.
     pub fn load(dir: &std::path::Path, device: &Device) -> anyhow::Result<Self> {
         let config: Config =
             serde_json::from_str(&std::fs::read_to_string(dir.join("config.json"))?)?;
@@ -400,8 +362,6 @@ mod tests {
 
     #[test]
     fn offset_causal_mask_lets_new_queries_see_the_whole_cache() {
-        // 2 new positions after 3 cached ones: rows see all cached keys,
-        // and only the causal part of the new ones.
         let mask = offset_causal_mask(2, 3, &Device::Cpu).unwrap();
         let rows: Vec<Vec<f32>> = mask.to_vec2().unwrap();
         assert_eq!(rows[0][..4], [0.0, 0.0, 0.0, 0.0]);

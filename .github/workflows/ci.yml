@@ -46,7 +46,5 @@ jobs:
       - name: Clippy (deny warnings)
         run: cargo clippy --all-targets -- -D warnings
 
-      # Frontend, tokenizer, and decoding-grammar unit tests. Checkpoint-backed
-      # end-to-end transcription needs model weights and runs locally, not here.
       - name: Test
         run: cargo test

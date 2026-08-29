@@ -1,10 +1,4 @@
 #!/usr/bin/env bash
-# Fetch an open Whisper checkpoint in the layout Kiku loads:
-# config.json + model.safetensors + tokenizer.json.
-#
-# Usage: fetch-model.sh [size] [dest-dir]
-#   size: tiny | base | small | medium (default: tiny)
-#   dest: default models/<size>
 set -euo pipefail
 
 SIZE="${1:-tiny}"

@@ -1,10 +1,4 @@
 #!/usr/bin/env bash
-# Fetch a LibriSpeech split and convert its FLAC utterances to WAV for the
-# eval-librispeech harness (kiku reads WAV; ffmpeg handles FLAC).
-#
-# Usage: fetch-librispeech.sh [split] [dest-dir]
-#   split: test-clean (default) | test-other | dev-clean | dev-other
-#   dest:  default data (the split extracts to <dest>/LibriSpeech/<split>)
 set -euo pipefail
 
 SPLIT="${1:-test-clean}"

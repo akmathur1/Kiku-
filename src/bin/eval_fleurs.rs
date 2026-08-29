@@ -1,22 +1,3 @@
-//! `eval-fleurs` — multilingual transcription (and X→English translation)
-//! over a FLEURS language, the Rust counterpart of the reference
-//! Multilingual_ASR notebook.
-//!
-//! Usage:
-//!   eval-fleurs <model-dir> <fleurs-lang-dir> [--limit N] [--every N] [--tsv out.tsv] [--translate]
-//!
-//! `<fleurs-lang-dir>` is an extracted FLEURS language directory (e.g.
-//! `data/fleurs/ko_kr`, from kiku/scripts/fetch-fleurs.sh) holding `test.tsv`
-//! and `audio/test/*.wav`. Each utterance is transcribed in its own language
-//! (forced, as the notebook does) and scored against the reference
-//! transcription after `normalize_basic` on both sides — pooled corpus WER,
-//! or CER for languages written without spaces. With `--translate`, each
-//! utterance is additionally translated to English; FLEURS ships no English
-//! reference for the translation task, so translations are written to the
-//! TSV for inspection rather than scored.
-//!
-//! Evaluation output is measurement only — it never becomes meeting memory.
-
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -27,8 +8,6 @@ struct Utterance {
     reference: String,
 }
 
-/// FLEURS directory name → Whisper language code. The regular case is the
-/// prefix before the first underscore; the exceptions are spelled out.
 fn whisper_language(fleurs_lang: &str) -> anyhow::Result<&str> {
     Ok(match fleurs_lang {
         "cmn_hans_cn" | "yue_hant_hk" => "zh",
@@ -42,8 +21,6 @@ fn whisper_language(fleurs_lang: &str) -> anyhow::Result<&str> {
     })
 }
 
-/// Languages written without spaces are scored per character, as the
-/// reference notebook does (word splits are not meaningful there).
 fn scores_by_character(language: &str) -> bool {
     matches!(language, "zh" | "ja" | "th" | "lo" | "my" | "km")
 }
@@ -59,7 +36,6 @@ fn collect_utterances(lang_dir: &Path) -> anyhow::Result<Vec<Utterance>> {
         if line.trim().is_empty() {
             continue;
         }
-        // Columns (no header): id, file_name, raw_transcription, transcription, …
         let cols: Vec<&str> = line.split('\t').collect();
         anyhow::ensure!(
             cols.len() >= 4,

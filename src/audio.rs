@@ -1,22 +1,10 @@
-//! The audio frontend: 16 kHz mono in, 80-channel log-Mel spectrogram out.
-//!
-//! Matches the Whisper reference frontend exactly: 25 ms analysis windows
-//! (n_fft = 400) with a 10 ms stride (hop = 160), a periodic Hann window,
-//! reflect padding of n_fft/2 on both sides, Slaney-normalized Mel filters
-//! over 0–8000 Hz, log10 magnitudes clamped to 8 dB of dynamic range below
-//! the peak, then scaled to roughly [-1, 1] via (x + 4) / 4.
-
 pub const SAMPLE_RATE: usize = 16_000;
 pub const N_FFT: usize = 400;
 pub const HOP_LENGTH: usize = 160;
 pub const CHUNK_SECONDS: usize = 30;
 pub const N_SAMPLES: usize = SAMPLE_RATE * CHUNK_SECONDS;
-/// Spectrogram frames per 30-second chunk (the encoder sees half after the
-/// stride-2 conv stem: 1500 positions).
 pub const N_FRAMES: usize = N_SAMPLES / HOP_LENGTH;
 
-/// Linear-interpolation resample to 16 kHz. The CLI accepts arbitrary WAV
-/// rates; production capture already produces 16 kHz so this is a no-op there.
 pub fn resample_to_16k(samples: &[f32], src_rate: usize) -> Vec<f32> {
     if src_rate == SAMPLE_RATE || samples.is_empty() {
         return samples.to_vec();
@@ -35,8 +23,6 @@ pub fn resample_to_16k(samples: &[f32], src_rate: usize) -> Vec<f32> {
         .collect()
 }
 
-/// Hz → Mel on the Slaney scale (linear below 1 kHz, logarithmic above),
-/// the scale librosa and the Whisper reference filterbank use.
 fn hz_to_mel(hz: f64) -> f64 {
     const MIN_LOG_HZ: f64 = 1000.0;
     const MIN_LOG_MEL: f64 = 15.0;
@@ -59,7 +45,6 @@ fn mel_to_hz(mel: f64) -> f64 {
     }
 }
 
-/// The Slaney-normalized triangular Mel filterbank, `n_mels` x (n_fft/2 + 1).
 pub fn mel_filterbank(n_mels: usize) -> Vec<Vec<f32>> {
     let n_freqs = N_FFT / 2 + 1;
     let fmax = SAMPLE_RATE as f64 / 2.0;
@@ -86,16 +71,10 @@ pub fn mel_filterbank(n_mels: usize) -> Vec<Vec<f32>> {
         .collect()
 }
 
-/// Compute the log-Mel spectrogram of exactly one 30-second chunk.
-///
-/// Input shorter than 30 s is zero-padded; longer input is truncated (the
-/// caller windows long audio into chunks). Returns `n_mels * N_FRAMES`
-/// values in row-major (mel, frame) order.
 pub fn log_mel_spectrogram(samples: &[f32], n_mels: usize) -> Vec<f32> {
     let mut audio = samples.to_vec();
     audio.resize(N_SAMPLES, 0.0);
 
-    // Reflect-pad n_fft/2 on both sides, as torch.stft(center=True) does.
     let pad = N_FFT / 2;
     let mut padded = Vec::with_capacity(audio.len() + 2 * pad);
     padded.extend((1..=pad).rev().map(|i| audio[i]));
@@ -106,7 +85,6 @@ pub fn log_mel_spectrogram(samples: &[f32], n_mels: usize) -> Vec<f32> {
             .map(|i| audio[i]),
     );
 
-    // Periodic Hann window.
     let window: Vec<f32> = (0..N_FFT)
         .map(|n| 0.5 * (1.0 - (2.0 * std::f32::consts::PI * n as f32 / N_FFT as f32).cos()))
         .collect();
@@ -115,7 +93,6 @@ pub fn log_mel_spectrogram(samples: &[f32], n_mels: usize) -> Vec<f32> {
     let fft = planner.plan_fft_forward(N_FFT);
     let n_freqs = N_FFT / 2 + 1;
 
-    // Power spectrogram, frame-major. The reference drops the last frame.
     let mut power = vec![0.0f32; N_FRAMES * n_freqs];
     let mut buf = vec![rustfft::num_complex::Complex::new(0.0f32, 0.0); N_FFT];
     for frame in 0..N_FRAMES {
@@ -129,7 +106,6 @@ pub fn log_mel_spectrogram(samples: &[f32], n_mels: usize) -> Vec<f32> {
         }
     }
 
-    // Mel projection, log compression, dynamic-range clamp, scaling.
     let filters = mel_filterbank(n_mels);
     let mut mel = vec![0.0f32; n_mels * N_FRAMES];
     let mut max_val = f32::MIN;
@@ -161,7 +137,6 @@ mod tests {
         let fb = mel_filterbank(80);
         assert_eq!(fb.len(), 80);
         assert_eq!(fb[0].len(), N_FFT / 2 + 1);
-        // Every filter has some mass, and adjacent filters overlap.
         for f in &fb {
             assert!(f.iter().any(|&w| w > 0.0));
         }
@@ -179,20 +154,16 @@ mod tests {
     fn silence_maps_to_scaled_floor() {
         let mel = log_mel_spectrogram(&[0.0; SAMPLE_RATE], 80);
         assert_eq!(mel.len(), 80 * N_FRAMES);
-        // All-silence input clamps to max-8 then scales: every value equal.
         let first = mel[0];
         assert!(mel.iter().all(|&v| (v - first).abs() < 1e-5));
     }
 
     #[test]
     fn tone_concentrates_energy_in_the_right_mel_band() {
-        // A 1 kHz tone should put its peak energy in the band whose center
-        // is nearest 1 kHz, and that band must out-weigh a distant one.
         let tone: Vec<f32> = (0..SAMPLE_RATE)
             .map(|i| (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / SAMPLE_RATE as f32).sin())
             .collect();
         let mel = log_mel_spectrogram(&tone, 80);
-        // Frame 50 is well inside the tone.
         let col = |m: usize| mel[m * N_FRAMES + 50];
         let peak_band = (0..80)
             .max_by(|&a, &b| col(a).partial_cmp(&col(b)).unwrap())

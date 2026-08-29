@@ -1,15 +1,3 @@
-//! The Rust port of the reference (openai/whisper) test suite, minus the
-//! parts that test features Kiku has not built yet (word-level timestamps via
-//! cross-attention DTW and its median filter — those tests land with that
-//! feature).
-//!
-//! Two tiers, mirroring the repo's has_db pattern honestly:
-//! - fixture-only tests run unconditionally (`tests/fixtures/jfk.wav`);
-//! - checkpoint-backed tests return early when `models/tiny` is absent
-//!   (CI has no checkpoint), so a green run there proves nothing — the real
-//!   execution is local with a fetched model. Run `scripts/fetch-model.sh
-//!   tiny` first to make them real.
-
 use std::path::{Path, PathBuf};
 
 use kiku::audio::{self, HOP_LENGTH, N_FFT, SAMPLE_RATE};
@@ -38,9 +26,6 @@ fn load_jfk() -> Vec<f32> {
         .collect()
 }
 
-/// Port of test_audio: the fixture decodes to 10–12 s of mono 16 kHz audio
-/// with sane amplitude, and the log-Mel output obeys the reference dynamic
-/// range (clamped to 8 below the peak, scaled by /4 → max − min ≤ 2.0).
 #[test]
 fn audio_and_log_mel_invariants() {
     let samples = load_jfk();
@@ -51,8 +36,6 @@ fn audio_and_log_mel_invariants() {
         (samples.iter().map(|s| (s - mean).powi(2)).sum::<f32>() / samples.len() as f32).sqrt();
     assert!(0.0 < std && std < 1.0);
 
-    // The frontend pads/trims to a full 30 s chunk, so the output length is
-    // fixed regardless of the input duration.
     let mel = audio::log_mel_spectrogram(&samples, 80);
     assert_eq!(mel.len(), 80 * audio::N_FRAMES);
     let max = mel.iter().cloned().fold(f32::MIN, f32::max);
@@ -60,19 +43,13 @@ fn audio_and_log_mel_invariants() {
     assert!(max - min <= 2.0, "dynamic range {} > 2.0", max - min);
     assert!(mel.iter().all(|v| v.is_finite()));
 
-    // Deterministic: the same audio produces the same spectrogram.
     let again = audio::log_mel_spectrogram(&samples, 80);
     assert_eq!(mel, again);
 
-    // The frontend constants the model depends on.
     assert_eq!(N_FFT, 400);
     assert_eq!(HOP_LENGTH, 160);
 }
 
-/// Port of test_tokenizer: language tokens form a contiguous run after SOT,
-/// every language tag looks like a language (2–3 lowercase letters), no
-/// control token is counted as a language, and all language tokens sit below
-/// the timestamp range.
 #[test]
 fn tokenizer_language_token_invariants() {
     let Some(dir) = model_dir() else {
@@ -95,7 +72,6 @@ fn tokenizer_language_token_invariants() {
         );
         assert!(id < sp.timestamp_begin);
     }
-    // Control tokens are not language tags.
     for id in [sp.transcribe, sp.translate, sp.no_speech, sp.no_timestamps] {
         assert!(
             tok.language_tag(id).is_none(),
@@ -103,16 +79,12 @@ fn tokenizer_language_token_invariants() {
         );
         assert!(!(sp.language_begin..sp.language_begin + sp.language_count).contains(&id));
     }
-    // Special/timestamp tokens decode to no text.
     assert_eq!(
         tok.decode(&[sp.sot, sp.language_begin, sp.transcribe, sp.timestamp_begin]),
         ""
     );
 }
 
-/// Port of test_transcribe: real end-to-end decoding of the JFK fixture with
-/// an open checkpoint — correct language, the famous words present, segments
-/// starting at 0.00 with monotonic, ordered timestamps.
 #[test]
 fn transcribe_jfk_end_to_end() {
     let Some(dir) = model_dir() else {

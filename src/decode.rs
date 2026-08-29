@@ -1,51 +1,25 @@
-//! The multitask decoding loop.
-//!
-//! The decoder is steered with the Whisper token format:
-//! `<|startoftranscript|> → language → task → (timestamps | <|notimestamps|>)
-//! → text → <|endoftext|>`. Language identification reads the distribution
-//! over language tokens at the first step; voice activity detection combines
-//! the <|nospeech|> probability with the average log-probability of the
-//! decoded text (0.6 / -1.0, the thresholds validated in the paper); long
-//! audio is windowed by the predicted timestamps, with the initial timestamp
-//! constrained to the first second of each window.
-//!
-//! Decoding is KV-cached (each step feeds one token, not the whole prefix)
-//! and runs the paper's temperature fallback: greedy first, then
-//! progressively hotter sampling whenever the result shows the failure
-//! signatures — a compression ratio above 2.4 (looping/repetition) or an
-//! average log-probability below −1 (low evidence).
-
 use candle_core::{Device, IndexOp, Tensor};
 
 use crate::audio;
 use crate::model::{DecoderCache, Kiku};
 use crate::tokenizer::Tokenizer;
 
-/// 20 ms per timestamp token.
 const TIME_PRECISION: f32 = 0.02;
-/// The initial timestamp of a window is constrained to [0, 1] s (§4.5).
 const MAX_INITIAL_TIMESTAMP: u32 = 50;
-/// VAD thresholds from the paper: no-speech prob > 0.6 AND avg logprob < -1.
 const NO_SPEECH_THRESHOLD: f32 = 0.6;
 const LOGPROB_THRESHOLD: f32 = -1.0;
-/// Decoded text whose zlib compression ratio exceeds this is degenerate
-/// repetition (§4.5) and triggers the temperature fallback.
 const COMPRESSION_RATIO_THRESHOLD: f32 = 2.4;
-/// The fallback ladder from the paper: greedy, then hotter sampling.
 const TEMPERATURES: [f32; 6] = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Task {
     Transcribe,
-    /// X→English speech translation.
     Translate,
 }
 
 #[derive(Debug, Clone)]
 pub struct Options {
     pub task: Task,
-    /// Force a language tag (e.g. "en"); `None` runs language identification
-    /// on each window.
     pub language: Option<String>,
 }
 
@@ -58,19 +32,13 @@ impl Default for Options {
     }
 }
 
-/// One decoded segment, bounded by predicted timestamp tokens.
 #[derive(Debug, Clone)]
 pub struct Segment {
-    /// Seconds from the start of the input audio.
     pub start: f32,
     pub end: f32,
     pub text: String,
-    /// Identified (or forced) language tag for the window.
     pub language: String,
-    /// Mean log-probability of the decoded tokens — the caller's evidence
-    /// signal; low values mean the text should not be trusted downstream.
     pub avg_logprob: f32,
-    /// P(<|nospeech|>) at the first decode step of the window.
     pub no_speech_prob: f32,
 }
 
@@ -92,9 +60,6 @@ impl Transcriber {
         })
     }
 
-    /// Transcribe 16 kHz mono samples of any length. Windows of 30 s are
-    /// decoded in sequence, each window advanced by its last predicted
-    /// timestamp so segments never straddle a window boundary.
     pub fn transcribe(&self, samples: &[f32], opts: &Options) -> anyhow::Result<Vec<Segment>> {
         let mut segments = Vec::new();
         let mut seek = 0usize;
@@ -115,7 +80,6 @@ impl Transcriber {
         Ok(self.model.encoder.forward(&mel)?)
     }
 
-    /// Next-token logits for tokens not yet in the cache.
     fn step(
         &self,
         new_tokens: &[u32],
@@ -130,9 +94,6 @@ impl Transcriber {
         Ok(logits.i((0, new_tokens.len() - 1))?.to_vec1()?)
     }
 
-    /// One rung of the fallback ladder: decode the window at a temperature.
-    /// Returns the decoded tokens (prefix excluded) and their average
-    /// log-probability under the untempered distribution.
     fn decode_with_temperature(
         &self,
         prefix: &[u32],
@@ -153,9 +114,6 @@ impl Transcriber {
             self.apply_timestamp_rules(&mut logits, &tokens);
             let probs = softmax(&logits);
 
-            // The paper's timestamp heuristic: if the total probability mass
-            // on timestamp tokens exceeds the best text token, emit a
-            // timestamp.
             let ts_mass: f32 = probs[sp.timestamp_begin as usize..].iter().sum();
             let best_text = argmax(&probs[..sp.timestamp_begin as usize]);
             let next = if ts_mass > probs[best_text] {
@@ -179,7 +137,6 @@ impl Transcriber {
                 best_text
             } as u32;
 
-            // Evidence is always the untempered probability of the choice.
             sum_logprob += probs[next as usize].max(f32::MIN_POSITIVE).ln();
             if next == sp.eot {
                 break;
@@ -191,8 +148,6 @@ impl Transcriber {
         Ok((tokens, avg_logprob))
     }
 
-    /// Decode one 30-second window. Returns its segments and how many
-    /// samples to advance the window by.
     fn decode_window(
         &self,
         window: &[f32],
@@ -202,8 +157,6 @@ impl Transcriber {
         let sp = self.tokenizer.special;
         let encoder_out = self.encode(window)?;
 
-        // First step from <|startoftranscript|> alone: read the no-speech
-        // probability and identify the language.
         let mut lid_cache = DecoderCache::default();
         let logits = self.step(&[sp.sot], &encoder_out, &mut lid_cache)?;
         let probs = softmax(&logits);
@@ -229,12 +182,6 @@ impl Transcriber {
         };
         let prefix = [sp.sot, language_token, task_token];
 
-        // The temperature fallback ladder (§4.5): accept the first decode
-        // that is neither degenerate repetition (compression ratio) nor
-        // low-evidence (average log-probability); otherwise retry hotter.
-        // When every rung fails the checks, keep the best-evidence
-        // non-repetitive attempt — its weak evidence travels with the
-        // segment for downstream gating.
         let mut tokens: Vec<u32> = Vec::new();
         let mut avg_logprob = f32::NEG_INFINITY;
         let mut last_attempt: Option<(Vec<u32>, f32)> = None;
@@ -243,8 +190,6 @@ impl Transcriber {
                 &prefix,
                 &encoder_out,
                 temperature,
-                // Deterministic per window and per rung, so a transcription
-                // is reproducible end to end.
                 (offset.to_bits() as u64) ^ ((attempt as u64) << 32),
             )?;
             let text = self.tokenizer.decode(&t);
@@ -255,16 +200,12 @@ impl Transcriber {
             }
             last_attempt = Some((t, lp));
             let needs_fallback = repetitive || lp < LOGPROB_THRESHOLD;
-            // A window the VAD gate will drop anyway (both arms: high
-            // no-speech AND low evidence) cannot be rescued by temperature.
             let is_silence = no_speech_prob > NO_SPEECH_THRESHOLD && lp < LOGPROB_THRESHOLD;
             if !needs_fallback || is_silence {
                 break;
             }
         }
         if tokens.is_empty() {
-            // Every rung was repetitive: keep the last attempt with its weak
-            // evidence rather than silently dropping a speech window.
             if let Some((t, lp)) = last_attempt {
                 tokens = t;
                 avg_logprob = lp;
@@ -272,7 +213,6 @@ impl Transcriber {
         }
         let decoded = &tokens[..];
 
-        // Voice activity detection: silence/non-speech skips the window.
         if no_speech_prob > NO_SPEECH_THRESHOLD && avg_logprob < LOGPROB_THRESHOLD {
             return Ok((Vec::new(), audio::N_SAMPLES));
         }
@@ -285,8 +225,6 @@ impl Transcriber {
         let mut last_ts = 0.0f32;
         for &id in decoded {
             if id >= sp.timestamp_begin {
-                // A closing timestamp can point past a short final window's
-                // real audio; clamp so segments never outlive the recording.
                 let t = ts_seconds(id).min(window_seconds);
                 last_ts = t;
                 if seg_tokens.is_empty() {
@@ -319,8 +257,6 @@ impl Transcriber {
         }
         segments.retain(|s| !s.text.is_empty());
 
-        // Advance the window to the last closed timestamp so the next window
-        // starts where this one's transcription genuinely ended.
         let advance = if last_ts > 0.0 {
             ((last_ts * audio::SAMPLE_RATE as f32) as usize).min(audio::N_SAMPLES)
         } else {
@@ -336,13 +272,8 @@ impl Transcriber {
             .ok_or_else(|| anyhow::anyhow!("unknown language tag: {tag}"))
     }
 
-    /// Whisper's timestamp grammar, applied as logit suppression:
-    /// specials never sample (except <|endoftext|>), timestamps appear in
-    /// pairs and never decrease, and the first timestamp of a window falls
-    /// within its first second.
     fn apply_timestamp_rules(&self, logits: &mut [f32], sampled: &[u32]) {
         let sp = self.tokenizer.special;
-        // Suppress every special token below the timestamp range except EOT.
         for id in sp.sot..sp.timestamp_begin {
             if id != sp.eot {
                 logits[id as usize] = f32::NEG_INFINITY;
@@ -359,13 +290,10 @@ impl Transcriber {
                 .unwrap_or(false);
         if last_was_ts {
             if penultimate_was_ts {
-                // A closed pair: the next token must be text (or EOT).
                 for l in logits[sp.timestamp_begin as usize..].iter_mut() {
                     *l = f32::NEG_INFINITY;
                 }
             } else {
-                // An open timestamp after text must close: only timestamps
-                // or EOT may follow.
                 for id in 0..sp.timestamp_begin {
                     if id != sp.eot {
                         logits[id as usize] = f32::NEG_INFINITY;
@@ -374,10 +302,6 @@ impl Transcriber {
             }
         }
 
-        // Timestamps never decrease. When the last token closed a segment
-        // (a timestamp right after text), that value stays legal so the next
-        // segment may open on the shared boundary; otherwise the next
-        // timestamp must strictly advance.
         if let Some(&max_ts) = sampled.iter().filter(|&&id| is_ts(id)).max() {
             let allow_equal = last_was_ts && !penultimate_was_ts;
             let end = if allow_equal { max_ts } else { max_ts + 1 };
@@ -386,8 +310,6 @@ impl Transcriber {
             }
         }
 
-        // The first sampled token is constrained to an initial timestamp
-        // within the first second of the window.
         if sampled.is_empty() {
             for (i, l) in logits.iter_mut().enumerate() {
                 let id = i as u32;
@@ -401,8 +323,6 @@ impl Transcriber {
     }
 }
 
-/// zlib compression ratio of the text — degenerate token loops compress far
-/// better than natural language (§4.5's repetition detector).
 fn compression_ratio(text: &str) -> f32 {
     let bytes = text.as_bytes();
     if bytes.is_empty() {
@@ -415,8 +335,6 @@ fn compression_ratio(text: &str) -> f32 {
     bytes.len() as f32 / compressed.len() as f32
 }
 
-/// A small deterministic xorshift64* generator — sampling stays reproducible
-/// for a given audio input without pulling in an RNG dependency.
 struct Rng(u64);
 
 impl Rng {
@@ -424,7 +342,6 @@ impl Rng {
         Self(seed | 1)
     }
 
-    /// Uniform in [0, 1).
     fn next_f32(&mut self) -> f32 {
         let mut x = self.0;
         x ^= x >> 12;
@@ -436,7 +353,6 @@ impl Rng {
     }
 }
 
-/// Sample an index from softmax(logits / temperature).
 fn sample(logits: &[f32], temperature: f32, rng: &mut Rng) -> usize {
     let tempered: Vec<f32> = logits.iter().map(|&l| l / temperature).collect();
     let probs = softmax(&tempered);

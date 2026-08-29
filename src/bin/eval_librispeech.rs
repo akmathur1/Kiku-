@@ -1,18 +1,3 @@
-//! `eval-librispeech` — word error rate on the LibriSpeech corpus.
-//!
-//! The Rust counterpart of OpenAI's LibriSpeech evaluation notebook: each
-//! utterance is transcribed (short-form, English forced), hypothesis and
-//! reference are both passed through the English normalizer, and the pooled
-//! corpus WER is reported.
-//!
-//! Usage:
-//!   eval-librispeech <model-dir> <librispeech-split-dir> [--limit N] [--every N] [--tsv out.tsv]
-//!
-//! The split directory is the extracted corpus (e.g. `LibriSpeech/test-clean`)
-//! with utterances converted to WAV next to each `.trans.txt` — see
-//! kiku/scripts/fetch-librispeech.sh. `--limit` caps the number of utterances,
-//! `--every` subsamples (every Nth utterance) for quick runs on CPU.
-
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -25,8 +10,6 @@ struct Utterance {
     reference: String,
 }
 
-/// Walk the split directory for `.trans.txt` files, each line
-/// `<utterance-id> <REFERENCE TEXT>`, expecting `<utterance-id>.wav` beside it.
 fn collect_utterances(root: &Path) -> anyhow::Result<Vec<Utterance>> {
     let mut utterances = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -162,8 +145,6 @@ fn main() -> anyhow::Result<()> {
         }
     );
 
-    // Short-form English transcription, matching the notebook's
-    // DecodingOptions(language="en", without_timestamps=True) intent.
     let opts = Options {
         language: Some("en".to_string()),
         ..Options::default()
