@@ -37,6 +37,8 @@ language, task, timestamp, and text tokens from the same softmax.
 | `tokenizer` | byte level BPE decoding plus the multitask special token map, read from the checkpoint's `tokenizer.json` |
 | `decode` | the multitask loop: SOT, language, task, timestamps, text, EOT, with reliability focused decoding heuristics |
 
+![Audio frontend: WAV input, mono mixdown, 16 kHz resample, 30 second chunks, Hann STFT, 80 mel filterbank, log compression](docs/frontend.svg)
+
 Decoding implements the following reliability heuristics:
 
 - **Voice activity detection**: a window is treated as non speech only when
@@ -47,6 +49,8 @@ Decoding implements the following reliability heuristics:
   model cannot ignore the opening words.
 - **Long form audio**: windows advance by the last predicted timestamp, so a
   segment never straddles a window boundary.
+
+![The decoding loop: the temperature ladder retries on repetition or weak evidence, the VAD gate drops non speech windows, and every emitted segment carries evidence](docs/decoding.svg)
 
 Every segment carries evidence: start and end times, the identified language,
 the average log probability, and the no speech probability. Downstream
@@ -133,6 +137,8 @@ standalone open source crate. Molterra's capture pipeline currently uses a
 hosted ASR backend. Kiku is the seam for a local, open backend behind the
 same evidence contract: an ASR backend trait with Kiku as one implementation,
 selected per session, with the higher hearing stages unchanged above it.
+
+![Where Kiku sits: consent gated meeting audio and the tenant lexicon feed Kiku, whose evidence carrying segments split into the display transcript and, past the evidence gate, trusted reasoning input](docs/pipeline.svg)
 
 ## Notebooks
 
