@@ -130,6 +130,38 @@ language, confidence. The hearing pipeline above it (record pass,
 reconciliation, hard word repair, acoustic regime gating) remains the trust
 layer above any ASR backend.
 
+## From Transcription to Memory
+
+Simple transcription ends at a string. Kiku's multitask design is what lets
+transcription continue into memory: because language identification, voice
+activity, timestamps, and text are all classes of one output layer, every
+decoded segment is already a piece of evidence — words, when they were said,
+in what language, and how sure the model is — produced by the same forward
+pass. That evidence register is the interface Molterra's memory layer
+consumes.
+
+The path, at the level of description (the memory layer's implementation is
+not part of this repository):
+
+1. **Register.** Kiku emits segments as evidence: text, start and end times,
+   language, average log probability, no speech probability.
+2. **Gate.** Only segments whose evidence clears the gate become trusted
+   reasoning input; weak segments stay display material a human can read but
+   nothing learns from.
+3. **Resolve.** Names, companies, and terms in trusted segments are resolved
+   against the tenant's closed lexicon — memory constrains the transcript,
+   the transcript never invents memory.
+4. **Absorb.** Resolved, gated segments become durable organizational memory:
+   graph facts, notes, and tasks, each holding a pointer back to the audio
+   span and confidence that grounds it, so every remembered claim can be
+   re-examined against its evidence.
+
+When the audio is weak the chain stops at the gate: the register records the
+uncertainty and memory abstains. The design goal is that the system never
+remembers a guess. The fuller narrative is in
+[MODEL-CARD.md](MODEL-CARD.md) under "Not Simple Transcription" and "Pairing
+with the Memory Layer".
+
 ## Relationship to Molterra
 
 Kiku was developed as Molterra's ASR module and is maintained here as a
