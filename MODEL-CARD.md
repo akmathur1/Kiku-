@@ -4,7 +4,8 @@ Kiku is Molterra's speech recognition module: a multiclass neural network for
 automatic speech recognition (ASR) and speech translation, implemented from
 scratch in Rust. This card follows the structure of Model Cards for Model
 Reporting (Mitchell et al., 2018). It states what the model is, how it is
-trained, where it is known to fail, and how Molterra uses its output.
+trained, where it is known to fail, and how Molterra turns its output into
+live reasoning and durable memory while a meeting is still happening.
 
 ## Model Details
 
@@ -158,6 +159,66 @@ A transcript in this design is not the product. It is the evidence stream
 that lets meeting speech become organizational memory without the memory
 ever trusting a guess.
 
+## From Register to Real Time Output
+
+The register is not written to disk and read later. It is consumed as it is
+produced, and the point of producing it in this form is that logic can run on
+it while the people in the room are still talking. What follows is the shape
+of that path as Molterra runs it; the implementation of the reasoning and
+memory stages lives in Molterra, not in this repository.
+
+**Streaming.** The model is trained on 30 second windows, but the runtime
+does not wait 30 seconds to speak. Audio is decoded over a rolling window
+with a cached decoder state, so a segment is registered within moments of
+its end timestamp, and a segment already registered is never silently
+rewritten by a later window. Retained session audio is heard a second time
+after the meeting in a record pass; the live and record registers are
+reconciled into one canonical transcript, and where they disagree the
+disagreement is kept as evidence rather than resolved by picking a winner.
+
+**Signal extraction.** Each registered segment is read for the things a
+meeting turns on: the names of people, companies, and products; acronyms
+and jargon; numbers, dates, and amounts; questions, and commitments of the
+form someone will do something by some time. Every extracted signal keeps
+the span and confidence of the segment it came from. Numbers are a hard
+boundary: no repair stage may rewrite a number, because a confidently
+wrong amount is worse than a marked uncertain one. Names are repaired only
+against the tenant's closed lexicon, and only when the acoustic evidence
+for the word is strong enough that the repair is a correction rather than
+a wish.
+
+**Deciding what to say.** The signals feed a battery of deterministic
+triggers, evaluated on every window against the tenant's memory: a question
+asked about something memory knows; a person or company named who has a
+history with this team; a figure stated that memory holds a different value
+for; a commitment made that should become a task. Each trigger produces a
+candidate with a grounding score, that score is calibrated to a probability,
+and a candidate surfaces only above a threshold derived from a declared
+cost of interrupting versus a declared cost of staying quiet. Thresholds
+are not tuned by hand. Every evaluation is logged, including the ones that
+surface nothing, so silence can be measured as precisely as speech.
+
+**Output the user can act on.** What reaches the screen in real time is
+grounded by construction: one fact, one source, the source being a memory
+entry with its own provenance or the audio span that grounds the claim. A
+question asked in the room can be answered from connected systems while the
+room is still on that topic; if nothing in the workspace grounds an answer,
+the answer is labeled as general knowledge and never dressed as workspace
+fact. A commitment becomes a drafted task only when its recipient,
+deliverable, and context are each supported by evidence; otherwise it is
+held as a commitment without a draft. Weak audio produces less output, not
+worse output.
+
+**Why the multitask design is what makes this possible.** Each of those
+stages needs the same four things about a span of text: when it was said,
+in what language, how confident the model was, and whether it was speech at
+all. A string transcriber would need those reconstructed after the fact by
+separate models, each with its own errors and none of them consistent with
+the words. Because Kiku predicts them jointly, the evidence a trigger fires
+on is the evidence the words were decoded with, and the real time logic can
+trust that a low confidence span is low confidence about the very words it
+is looking at.
+
 ## Intended Use in Molterra
 
 Kiku exists to turn meeting speech into evidence carrying text. Molterra's
@@ -200,8 +261,13 @@ are specific:
   speaker. Hallucination and repetition are worse in lower resource
   languages. Molterra measures rather than assumes: the per language
   harnesses exist for exactly this.
-- **Not real time out of the box.** The model processes 30 second windows.
-  Molterra's capture pipeline handles streaming above it.
+- **Latency is a property of the runtime, not the model.** The model is
+  trained on 30 second windows; live behavior comes from rolling window
+  decoding with a cached decoder state and from the streaming, reconciling
+  capture pipeline above the model. A segment's confidence is available at
+  the moment the segment is, which is what lets the real time logic gate
+  on it, but the first words of a window are known later than a purely
+  frame synchronous system would report them.
 
 ## Broader Implications
 

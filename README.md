@@ -156,11 +156,15 @@ not part of this repository):
    span and confidence that grounds it, so every remembered claim can be
    re-examined against its evidence.
 
-When the audio is weak the chain stops at the gate: the register records the
-uncertainty and memory abstains. The design goal is that the system never
-remembers a guess. The fuller narrative is in
-[MODEL-CARD.md](MODEL-CARD.md) under "Not Simple Transcription" and "Pairing
-with the Memory Layer".
+This runs live, not after the meeting: segments are registered over a rolling
+window as they are spoken, read for names, numbers, questions, and
+commitments, evaluated by deterministic triggers against memory, and the
+candidates that clear a derived threshold reach the user as grounded output
+while the room is still on the topic. When the audio is weak the chain stops
+at the gate: the register records the uncertainty and memory abstains. The
+design goal is that the system never remembers a guess. The fuller narrative
+is in [MODEL-CARD.md](MODEL-CARD.md) under "Not Simple Transcription", "From
+Register to Real Time Output", and "Pairing with the Memory Layer".
 
 ## Relationship to Molterra
 
